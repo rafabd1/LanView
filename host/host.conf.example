@@ -4,3 +4,5 @@ bind_address=192.168.1.100
 capture=portal
 # Leave empty to use the screen selected in the portal.
 output_name=
+# Requires the optional root-owned GPU clock helper installed for this user.
+gpu_clock_control=disabled

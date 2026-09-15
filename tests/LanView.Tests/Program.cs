@@ -264,6 +264,83 @@ Run("Viewer state keeps identity and disables presence sharing", () =>
     Require(ViewerState.SetIniValue("", "streamsettings", "richpresence", "false").Contains("[streamsettings]\nrichpresence=false"), "Empty settings were not initialized.");
 });
 
+Run("Viewer window size keeps its pixel dimensions at the same DPI", () =>
+{
+    var size = new ViewerWindowSize(1440, 850, 96);
+    var restored = size.FitToWorkingArea(new(100, 70, 900, 600), new(0, 0, 1920, 1040), 96);
+    Require(restored == new Rectangle(100, 70, 1440, 850), "The saved window size or current position changed.");
+});
+
+Run("Viewer window size scales with monitor DPI", () =>
+{
+    var size = new ViewerWindowSize(1000, 700, 96);
+    var restored = size.FitToWorkingArea(new(100, 50, 900, 600), new(0, 0, 2560, 1400), 144);
+    Require(restored == new Rectangle(100, 50, 1500, 1050), "The size did not scale with the display.");
+    var scaledDown = new ViewerWindowSize(1500, 1050, 144)
+        .FitToWorkingArea(new(100, 50, 900, 600), new(0, 0, 1920, 1040), 96);
+    Require(scaledDown.Size == new Size(1000, 700), "The size did not scale down correctly.");
+});
+
+Run("Viewer window restore fits smaller and negative-coordinate monitors", () =>
+{
+    var size = new ViewerWindowSize(2500, 1600, 96);
+    Require(size.FitToWorkingArea(new(1800, 1000, 900, 600), new(0, 0, 1280, 720), 96)
+        == new Rectangle(0, 0, 1280, 720), "The restored window exceeded the work area.");
+    var secondary = new Rectangle(-1920, -100, 1920, 1040);
+    var restored = new ViewerWindowSize(1200, 800, 96)
+        .FitToWorkingArea(new(-2000, -300, 900, 600), secondary, 96);
+    Require(restored == new Rectangle(-1920, -100, 1200, 800), "Negative monitor coordinates were lost.");
+    Require(secondary.Contains(restored), "The restored window was off-screen.");
+});
+
+Run("Viewer window dimensions reject invalid or unbounded values", () =>
+{
+    foreach (var size in new[]
+    {
+        new ViewerWindowSize(0, 600, 96), new ViewerWindowSize(800, -1, 96),
+        new ViewerWindowSize(800, 600, 0), new ViewerWindowSize(int.MaxValue, 600, 96),
+        new ViewerWindowSize(800, 600, uint.MaxValue)
+    }) Require(!size.IsValid, "An invalid window size was accepted.");
+});
+
+Run("Viewer window storage is separate, atomic, and tolerant of damaged preferences", () =>
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"LanView-window-test-{Guid.NewGuid():N}");
+    var path = Path.Combine(directory, "viewer-window.json");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        Require(ViewerWindowSizeStore.FilePath != ProfileStore.FilePath
+            && Path.GetDirectoryName(ViewerWindowSizeStore.FilePath) == Path.GetDirectoryName(ProfileStore.FilePath),
+            "Window preferences must not overwrite the connection profile.");
+        Require(ViewerWindowSizeStore.Load(path) is null, "A missing preference must use the default size.");
+        var first = new ViewerWindowSize(1440, 850, 96);
+        ViewerWindowSizeStore.Save(first, path);
+        Require(ViewerWindowSizeStore.Load(path) == first, "Window size did not round-trip.");
+        var second = first with { Width = 1200 };
+        ViewerWindowSizeStore.Save(second, path);
+        Require(ViewerWindowSizeStore.Load(path) == second, "A changed size was not saved.");
+        try
+        {
+            ViewerWindowSizeStore.Save(second with { Width = -1 }, path);
+            throw new InvalidOperationException("Saving invalid dimensions succeeded.");
+        }
+        catch (ArgumentException) { }
+        Require(ViewerWindowSizeStore.Load(path) == second, "An invalid update overwrote the previous size.");
+        Require(Directory.GetFiles(directory).Length == 1, "A temporary preferences file was left behind.");
+        foreach (var content in new[] { "{", "null", "{}", "[]", "{\"Width\":-1,\"Height\":850,\"Dpi\":96}", new string(' ', 4097) })
+        {
+            File.WriteAllText(path, content);
+            Require(ViewerWindowSizeStore.Load(path) is null, "A damaged window preference was accepted.");
+        }
+    }
+    finally
+    {
+        if (File.Exists(path)) File.Delete(path);
+        Directory.Delete(directory);
+    }
+});
+
 Console.WriteLine($"{passed} passed; {failures} failed. No network connections or remote input were used.");
 return failures == 0 ? 0 : 1;
 

@@ -1,6 +1,6 @@
 # LanView for Windows
 
-Run `LanView-0.1.0-Setup-win-x64.exe` to install LanView for the current user. It needs no administrator access and includes .NET and Moonlight 6.1.0; there is no separate Moonlight selection or download. The default folder is `%USERPROFILE%\.local\share\LanView\App`. Start LanView from its Start menu or desktop shortcut. Close the app and its video window before upgrading.
+Run `LanView-0.1.1-Setup-win-x64.exe` to install LanView for the current user. It needs no administrator access and includes .NET and Moonlight 6.1.0; there is no separate Moonlight selection or download. The default folder is `%USERPROFILE%\.local\share\LanView\App`. Start LanView from its Start menu or desktop shortcut. Close the app and its video window before upgrading.
 
 For the portable ZIP, extract the whole archive into a writable folder and open `LanView.exe`. Keep the `tools` folder beside it. Both packages use the included Moonlight client automatically and download no components when the app starts.
 
@@ -11,6 +11,10 @@ The Linux computer needs a working Wayland session, Sunshine, NVIDIA NVENC and t
 Open LanView, enter the Linux computer's private IPv4 address and SSH username, then save the profile. Use **Parear** (Pair) for the first connection and confirm Moonlight's PIN in Sunshine. **Conectar** (Connect) opens the desktop in Moonlight. **Desconectar** (Disconnect) releases the session. The current Windows interface uses Portuguese labels.
 
 While the video window has focus, keyboard shortcuts go to Linux. Click outside it to return control to Windows; no release shortcut is needed. Windows still handles `Ctrl+Alt+Del`.
+
+The video window remembers its last normal size and adapts it to the current display scale and available screen area. Fullscreen, maximized and minimized sizes do not replace that preference. The next session starts windowed.
+
+The Linux package also contains an optional [session clock helper](host/gpu-clock/README.md) for supported NVIDIA hardware. An administrator must install and configure it separately before enabling it in the host profile. It resets the configured graphics clock when the session lease ends; it does not enable persistence or change the display GPU.
 
 Enable **Sincronizar texto e arquivos copiados durante a sessão** for two-way copy and paste of plain text, files and folders. Use normal Copy and Paste commands, for example between Windows Explorer and Thunar. Files become available to paste after their transfer finishes. Content copied before connecting or enabling sharing is not sent.
 

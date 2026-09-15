@@ -8,7 +8,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>LanView</AssemblyName>
     <RootNamespace>LanView.Windows</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Product>LanView</Product>
     <Description>Uma janela para seu desktop Linux na rede local.</Description>
     <ApplicationIcon>Assets\LanView.ico</ApplicationIcon>

@@ -122,7 +122,7 @@ Copy-SourceDirectory -Source $lanviewSource -Destination (Join-Path $bundle 'sou
 Copy-SourceDirectory -Source (Join-Path $lanviewSource 'host') -Destination (Join-Path $bundle 'host')
 foreach ($name in @('README.md', 'SOURCE.md')) { Copy-Item -LiteralPath (Join-Path $lanviewSource "packaging\$name") -Destination (Join-Path $bundle $name) }
 Copy-Item -LiteralPath (Join-Path $lanviewSource 'THIRD_PARTY.md') -Destination (Join-Path $bundle 'THIRD_PARTY.md')
-$unexpectedState = @(Get-ChildItem -LiteralPath $bundle -Recurse -File | Where-Object { $_.Name -match '^(profile|credentials?|sunshine_state|identity)\.(json|xml|ini)$' -or $_.Extension -in @('.pem', '.key', '.pfx', '.p12', '.log', '.dmp') })
+$unexpectedState = @(Get-ChildItem -LiteralPath $bundle -Recurse -File | Where-Object { $_.Name -match '^(profile|viewer-window|gpu-clock|credentials?|sunshine_state|identity)\.(json|xml|ini)$' -or $_.Extension -in @('.pem', '.key', '.pfx', '.p12', '.log', '.dmp') })
 if ($unexpectedState.Count -gt 0) { throw 'Local state or credential files were found in the staged package.' }
 [xml]$projectDocument = Get-Content -LiteralPath $snapshotProject -Raw
 $version = [string]$projectDocument.Project.PropertyGroup.Version

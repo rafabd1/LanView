@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Package = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\LanView-0.1.0-win-x64.zip'),
+    [string]$Package = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\LanView-0.1.1-win-x64.zip'),
     [Parameter(Mandatory)][string]$MoonlightArchive,
     [string]$MoonlightSourceArchive
 )
@@ -37,13 +37,16 @@ try {
         Assert-That (-not $entries.ContainsKey($entry.FullName)) 'Duplicate package entry.'
         Assert-That ($entry.FullName -notmatch '(^|[\/])\.\.([\/]|$)|^[\/]') 'Unsafe package path.'
         Assert-That ($entry.FullName -notmatch '(^|/)(bin|obj|build|\.build|__pycache__|\.git|node_modules)/') 'A generated build directory entered the package.'
-        Assert-That ($entry.Name -notmatch '^(profile|credentials?|sunshine_state|identity)\.(json|xml|ini)$|\.(pem|key|pfx|p12|log|dmp)$') 'Local state or credential file entered the package.'
+        Assert-That ($entry.Name -notmatch '^(profile|viewer-window|gpu-clock|credentials?|sunshine_state|identity)\.(json|xml|ini)$|\.(pem|key|pfx|p12|log|dmp)$') 'Local state or credential file entered the package.'
         $entries[$entry.FullName] = $entry
     }
     foreach ($required in @('LanView.exe', 'tools/Moonlight/Moonlight.exe', 'tools/Moonlight/portable.dat', 'host/lanview-host', 'host/README.md', 'README.md', 'SOURCE.md', 'THIRD_PARTY.md', 'bundle.json', 'checksums.sha256', 'licenses/moonlight/LICENSE', 'licenses/microsoft.netcore.app.runtime.win-x64/LICENSE.TXT', 'licenses/microsoft.netcore.app.runtime.win-x64/THIRD-PARTY-NOTICES.TXT', 'licenses/microsoft.windowsdesktop.app.runtime.win-x64/LICENSE', 'source/LanView/src/LanView.Windows/LanView.Windows.csproj')) {
         Assert-That ($entries.ContainsKey($required)) "Required package entry missing: $required"
     }
     $manifest = Read-Entry $entries['bundle.json'] | ConvertFrom-Json
+    foreach ($clockFile in @('host/gpu-clock/lanview-gpu-clock', 'host/gpu-clock/install.sh', 'host/gpu-clock/README.md')) {
+        Assert-That ($entries.ContainsKey($clockFile)) "Clock helper source missing: $clockFile"
+    }
     foreach ($iconFile in @('assets/LanView.ico', 'source/LanView/src/LanView.Windows/Assets/LanView.ico', 'source/LanView/src/LanView.Windows/Assets/LanView.png', 'source/LanView/scripts/build-icon.ps1')) {
         Assert-That ($entries.ContainsKey($iconFile)) "Icon asset or source missing: $iconFile"
     }

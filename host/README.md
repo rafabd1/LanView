@@ -26,11 +26,13 @@ Status has this shape:
 {"running":false,"state":"inactive","gpuRuntimeStatus":"suspended","gpuPci":"0000:01:00.0","capture":"portal"}
 ```
 
-The helper reads `runtime_status` from sysfs. It never polls NVIDIA management tools, changes power policy, enables persistence, or changes which GPU drives the desktop. NVENC wakes the GPU when Sunshine opens its encoder. Stopping Sunshine releases its contexts; the driver decides when the GPU suspends, and other applications may keep it active.
+Status reads `runtime_status` from sysfs without polling NVIDIA management tools. NVENC wakes the GPU when Sunshine opens its encoder. Stopping Sunshine releases its contexts; the driver decides when the GPU suspends, and other applications may keep it active.
+
+For optional session-only graphics clock control, install the [privileged clock helper](gpu-clock/README.md), then set `gpu_clock_control=enabled` in the private host profile. Only managed `run` sessions use it; detached `start` sessions do not. The helper resets clocks when its lease ends, including EOF or a missed heartbeat. It does not enable persistence, change memory clocks or power limits, or select a different display GPU. Installation requires administrator access once; the fixed runtime command uses a narrow permission. Leave the setting disabled when the helper is not installed or another tool manages GPU clocks.
 
 The generated configuration requires stream encryption, disables UPnP, binds to the selected LAN address, and permits Web UI access from LAN addresses. The Web UI uses Sunshine's HTTPS authentication with credentials provisioned before launch. Pair clients through the normal authenticated Sunshine UI. No authentication proxy or alternate pairing path is added.
 
-Sunshine configuration lives under `~/.config/lanview/upstream/sunshine`. The helper rewrites `sunshine.conf` from its fixed settings and `host.conf` on each start; it retains credentials, pairings, and portal tokens. The profile accepts only `bind_address`, `capture`, and `output_name`. The package remains responsible for upgrades and device permissions.
+Sunshine configuration lives under `~/.config/lanview/upstream/sunshine`. The helper rewrites `sunshine.conf` from its fixed settings and `host.conf` on each start; it retains credentials, pairings, and portal tokens. The profile accepts only `bind_address`, `capture`, `output_name`, and `gpu_clock_control`. The package remains responsible for upgrades and device permissions.
 
 Logs are available through `journalctl --user -u app-dev.lizardbyte.app.Sunshine-LanView.service`. Shell checks: `bash -n host/lanview-host` and `bash host/tests/test-host.sh`.
 

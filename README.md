@@ -7,12 +7,14 @@ LanView starts the Linux host through an existing, trusted SSH connection, then 
 ## Current version
 
 - Native Windows interface and a local connection profile.
+- The video window remembers its last normal size, including display scaling.
 - Upstream Sunshine and Moonlight handle pairing, video, audio and input.
 - Desktop preset: 1080p, 60 FPS, HEVC, hardware decoding, requested 4:4:4 and absolute mouse input.
 - Optional two-way copy and paste for plain text, files and folders through SSH.
 - Linux host runs as the desktop user, in its own systemd unit.
 - An SSH heartbeat owns the session. EOF or a 35-second heartbeat timeout stops that unit.
 - GPU status reads PCI sysfs attributes without waking the GPU.
+- Optional session-only NVIDIA clock control, with automatic cleanup on lease loss.
 
 Moonlight opens as a separate, normal window. Direct drag-and-drop between desktops, automatic desktop resizing and a built-in video surface are not implemented. The client requests 4:4:4 to preserve color detail, but this does not make HEVC mathematically lossless or prove that 4:4:4 was negotiated. Check the stream diagnostics for the active format.
 
@@ -52,13 +54,13 @@ dotnet run --project tests/LanView.Clipboard.Tests -c Debug
 
 The icon artwork and multi-size Windows icon are in `src/LanView.Windows/Assets`. To regenerate the ICO from the PNG, run `pwsh -File scripts/build-icon.ps1` on Windows.
 
-The build writes `artifacts/LanView-0.1.0-win-x64.zip` and the accompanying `MoonlightSrc-6.1.0.tar.gz` source archive. The ZIP contains a self-contained Windows executable, clean upstream Moonlight files, Linux helper sources, license notices and a LanView source snapshot. It does not include profiles or pairing state.
+The build writes `artifacts/LanView-0.1.1-win-x64.zip` and the accompanying `MoonlightSrc-6.1.0.tar.gz` source archive. The ZIP contains a self-contained Windows executable, clean upstream Moonlight files, Linux helper sources, license notices and a LanView source snapshot. It does not include profiles or pairing state.
 
 The script accepts `-MoonlightArchive` and `-MoonlightSourceArchive` paths for cached official downloads. Both archives must match the pinned SHA256 values. `-Offline` disables build downloads and uses locally cached .NET 10.0.11 runtime packs. Without that switch, the build may fetch missing archives and build-time packages. Linux setup still needs the packages and build tools listed in the host guide.
 
 To build the installer, obtain [Inno Setup 6.7.3 from its official release](https://github.com/jrsoftware/issrc/releases/tag/is-6_7_3) and follow the [download verification instructions](https://jrsoftware.org/isdl-verify.php). The official `innosetup-6.7.3.exe` has SHA256 `9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732` and a valid Authenticode signature from Pyrsys B.V. Its [documented portable mode](https://jrsoftware.org/ishelp/topic_technotes.htm) avoids a global compiler installation. For example, run it with `/PORTABLE=1 /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS /TASKS="" /DIR="C:\build-tools\InnoSetup-6.7.3"`.
 
-After building the ZIP, run `pwsh -File scripts/build-installer.ps1 -CompilerPath "C:\build-tools\InnoSetup-6.7.3\ISCC.exe" -MoonlightArchive "C:\downloads\MoonlightPortable-x64-6.1.0.zip"`. This script uses the verified ZIP and its matching `packaging/LanView.iss` source snapshot; it performs no downloads or installation. It writes `artifacts/LanView-0.1.0-Setup-win-x64.exe` and its SHA256 file. Keep the companion Moonlight source archive beside the installer when distributing it. The generated installer is not code-signed.
+After building the ZIP, run `pwsh -File scripts/build-installer.ps1 -CompilerPath "C:\build-tools\InnoSetup-6.7.3\ISCC.exe" -MoonlightArchive "C:\downloads\MoonlightPortable-x64-6.1.0.zip"`. This script uses the verified ZIP and its matching `packaging/LanView.iss` source snapshot; it performs no downloads or installation. It writes `artifacts/LanView-0.1.1-Setup-win-x64.exe` and its SHA256 file. Keep the companion Moonlight source archive beside the installer when distributing it. The generated installer is not code-signed.
 
 Use `scripts/test-package.ps1 -MoonlightArchive <official-portable-zip>` to check the ZIP without launching it. The check compares every bundled Moonlight file with the official archive, verifies the package checksums and checks that host protocol sources and license texts are present.
 
@@ -70,7 +72,9 @@ bash host/tests/test-host.sh
 
 ## Power and capture
 
-The desktop may run on an integrated GPU while NVENC uses a separate NVIDIA GPU. Capture compatibility and the transfer between GPUs must be tested on the actual machine. LanView does not change the display GPU, driver persistence mode or system power settings.
+The desktop may run on an integrated GPU while NVENC uses a separate NVIDIA GPU. Capture compatibility and the transfer between GPUs must be tested on the actual machine. LanView does not change the display GPU, driver persistence mode, memory clocks or power limits.
+
+On supported NVIDIA hardware, an administrator can install the optional [session clock helper](host/gpu-clock/README.md). It applies a configured graphics clock while a managed session is active and restores automatic clocks when the session ends or its heartbeat expires. It is disabled by default and must not be combined with another clock manager. The Windows app does not need administrator access.
 
 Stopping the host releases its resources; the kernel and driver decide when to suspend the GPU. Other programs can keep it active. Checking a running process alone does not establish that capture or streaming succeeded.
 

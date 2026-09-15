@@ -25,6 +25,7 @@ read_profile() {
     lv_capture=portal
     lv_output=
     lv_bind=
+    lv_gpu_clock_control=disabled
     [[ -e $profile ]] || return 0
     [[ -f $profile && ! -L $profile && -O $profile ]] ||
         { fail 'The host profile must be a regular file owned by this user.'; return 1; }
@@ -47,6 +48,10 @@ read_profile() {
                 is_private_ipv4 "$value" ||
                     { fail 'bind_address must be a private LAN IPv4 address.'; return 1; }
                 lv_bind=$value ;;
+            gpu_clock_control)
+                [[ $value == enabled || $value == disabled ]] ||
+                    { fail 'gpu_clock_control must be enabled or disabled.'; return 1; }
+                lv_gpu_clock_control=$value ;;
             *) fail "Unknown host profile key: $key"; return 1 ;;
         esac
     done < "$profile"
@@ -104,11 +109,67 @@ owned_unit() {
 }
 
 stop_host() {
+    local cleanup_result=0
+    stop_clock_control || cleanup_result=1
     unit_state
     if [[ $lv_unit_state == active || $lv_unit_state == activating || $lv_unit_state == deactivating ]]; then
         owned_unit || { fail 'The service name belongs to another unit; leaving it unchanged.'; return 1; }
         systemctl --user stop "$LV_UNIT"
     fi
+    return "$cleanup_result"
+}
+
+clock_control_available() {
+    [[ -x /usr/local/libexec/lanview-gpu-clock ]] && command -v sudo >/dev/null
+}
+
+clock_control_run() {
+    sudo -n -- /usr/local/libexec/lanview-gpu-clock hold
+}
+
+start_clock_control() {
+    [[ $lv_gpu_clock_control == enabled ]] || return 0
+    clock_control_available ||
+        { fail 'Install the optional GPU clock helper before enabling gpu_clock_control.'; return 1; }
+    local reply original_input original_output
+    coproc LV_CLOCK { clock_control_run; }
+    lv_clock_pid=$LV_CLOCK_PID
+    original_input=${LV_CLOCK[1]}
+    original_output=${LV_CLOCK[0]}
+    exec {lv_clock_input}>&"$original_input"
+    exec {lv_clock_output}<&"$original_output"
+    exec {original_input}>&-
+    exec {original_output}<&-
+    if ! IFS= read -r -t 15 reply <&"$lv_clock_output" || [[ $reply != READY ]]; then
+        fail 'The GPU clock helper did not become ready. Check its system journal.'
+        return 1
+    fi
+    printf 'LanView: Session GPU clock control active.\n' >&2
+}
+
+renew_clock_control() {
+    [[ -n ${lv_clock_input:-} ]] || return 0
+    # A failed pipe must trigger normal host cleanup, not terminate on SIGPIPE.
+    (trap '' PIPE; printf '\n' >&"$lv_clock_input") ||
+        { fail 'The GPU clock lease ended unexpectedly.'; return 1; }
+}
+
+stop_clock_control() {
+    local result=0
+    if [[ -n ${lv_clock_input:-} ]]; then
+        exec {lv_clock_input}>&-
+        unset lv_clock_input
+    fi
+    if [[ -n ${lv_clock_output:-} ]]; then
+        exec {lv_clock_output}<&-
+        unset lv_clock_output
+    fi
+    if [[ -n ${lv_clock_pid:-} ]]; then
+        # EOF lets the privileged service restore clocks before Sunshine releases the GPU.
+        wait "$lv_clock_pid" || result=1
+        unset lv_clock_pid
+    fi
+    [[ $result == 0 ]] || fail 'GPU clock cleanup failed; inspect the clock helper journal.'
 }
 
 prepare_paths() {
@@ -242,6 +303,7 @@ lease_loop() {
         [[ -z $heartbeat ]] || { fail 'Invalid lease heartbeat.'; return 1; }
         unit_state
         [[ $lv_unit_state == active || $lv_unit_state == activating ]] || return 1
+        renew_clock_control || return 1
     done
 }
 
@@ -260,6 +322,7 @@ main() {
             trap 'exit 129' HUP
             trap 'exit 130' INT
             trap 'exit 143' TERM
+            start_clock_control
             print_status
             lease_loop
             ;;

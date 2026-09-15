@@ -23,6 +23,12 @@ assert read_profile "$test_tmp/profile"
 assert test "$lv_capture" = kms
 assert test "$lv_output" = eDP-1
 assert test "$lv_bind" = 192.168.1.100
+assert test "$lv_gpu_clock_control" = disabled
+printf '%s\n' 'gpu_clock_control=enabled' > "$test_tmp/profile"
+assert read_profile "$test_tmp/profile"
+assert test "$lv_gpu_clock_control" = enabled
+printf '%s\n' 'gpu_clock_control=1200;unexpected' > "$test_tmp/profile"
+reject read_profile "$test_tmp/profile"
 printf '%s\n' 'capture=$(touch should-not-exist)' > "$test_tmp/profile"
 reject read_profile "$test_tmp/profile"
 printf '%s\n' 'global_prep_cmd=unexpected' > "$test_tmp/profile"
@@ -63,5 +69,34 @@ assert test "$test_calls" = 0
 owned_unit() { return 0; }
 assert stop_host
 assert test "$test_calls" = 1
+
+# The clock lease has no command channel: it accepts only the host's empty heartbeat.
+clock_control_available() { return 0; }
+clock_control_run() {
+    printf 'READY\n'
+    local heartbeat
+    while IFS= read -r heartbeat; do
+        [[ -z $heartbeat ]] || return 1
+        printf 'heartbeat\n' >> "$test_tmp/clock-events"
+    done
+    printf 'stopped\n' >> "$test_tmp/clock-events"
+}
+lv_gpu_clock_control=disabled
+assert start_clock_control
+assert test -z "${lv_clock_pid:-}"
+lv_gpu_clock_control=enabled
+assert start_clock_control
+assert test -n "$lv_clock_pid"
+assert renew_clock_control
+assert stop_clock_control
+assert test "$(<"$test_tmp/clock-events")" = $'heartbeat\nstopped'
+assert test -z "${lv_clock_pid:-}"
+assert test -z "${lv_clock_input:-}"
+assert stop_clock_control
+clock_control_run() { printf 'NOT_READY\n'; }
+reject start_clock_control
+assert stop_clock_control
+clock_control_available() { return 1; }
+reject start_clock_control
 
 printf 'Host helper checks passed.\n'

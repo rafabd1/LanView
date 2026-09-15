@@ -5,6 +5,9 @@
 *.user
 *.log
 profile.json
+viewer-window.json
+viewer-window-*.tmp
+gpu-clock.json
 host.conf
 credentials.json
 sunshine_state.json

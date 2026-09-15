@@ -1,0 +1,232 @@
+#!/usr/bin/python3 -I
+# LanView GPU clock helper v1
+"""Fixed, opt-in GPU clock lease; only the hold action is exposed through sudo."""
+
+import json
+import os
+import re
+import select
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+CONFIG = Path("/etc/lanview/gpu-clock.json")
+RUNTIME = Path("/run/lanview-gpu-clock")
+MARKER = RUNTIME / "applied.json"
+HELPER = "/usr/local/libexec/lanview-gpu-clock"
+UNIT = "lanview-gpu-clock.service"
+HOST_UNIT = "app-dev.lizardbyte.app.Sunshine-LanView.service"
+HOST_DESCRIPTION = "LanView Sunshine session"
+LEASE_SECONDS = 35
+CHECK_SECONDS = 5
+ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+PCI = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]\Z")
+TOKEN = re.compile(r"[0-9a-f]{32}\Z")
+
+
+class ClockError(Exception):
+    pass
+
+
+def secure_directory(path):
+    """Reject symlinks and writable/non-root ancestors before privileged I/O."""
+    path = Path(path)
+    for part in [path, *path.parents]:
+        info = part.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ClockError("A privileged directory is not root-owned and protected.")
+
+
+def protected_json(path):
+    secure_directory(path.parent)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+            raise ClockError("A privileged file must be root-owned with mode 600.")
+        data = stream.read(4097)
+    if len(data) > 4096:
+        raise ClockError("Privileged configuration is too large.")
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ClockError("Duplicate privileged configuration key.")
+            value[key] = item
+        return value
+
+    value = json.loads(data, object_pairs_hook=unique)
+    if not isinstance(value, dict):
+        raise ClockError("Privileged configuration must be an object.")
+    return value
+
+
+def validate_config(value):
+    if set(value) != {"managedBy", "uid", "gpuPci", "clockMHz"}:
+        raise ClockError("Unexpected GPU clock configuration keys.")
+    if value["managedBy"] != "LanViewGpuClock/1":
+        raise ClockError("Unrecognized GPU clock configuration.")
+    if type(value["uid"]) is not int or not 1 <= value["uid"] <= 2147483647:
+        raise ClockError("The desktop UID must be a non-root numeric UID.")
+    if not isinstance(value["gpuPci"], str) or not PCI.fullmatch(value["gpuPci"]):
+        raise ClockError("The GPU must be identified by its full PCI address.")
+    if type(value["clockMHz"]) is not int or not 300 <= value["clockMHz"] <= 3000:
+        raise ClockError("The GPU clock must be between 300 and 3000 MHz.")
+    return value
+
+
+def read_config():
+    return validate_config(protected_json(CONFIG))
+
+
+def invocation_id():
+    value = os.environ.get("INVOCATION_ID", "")
+    if not TOKEN.fullmatch(value):
+        raise ClockError("This action requires its systemd service invocation.")
+    return value
+
+
+def run_command(arguments, timeout=10):
+    try:
+        return subprocess.run(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=ENV, timeout=timeout, check=True,
+                              text=True).stdout
+    except subprocess.CalledProcessError as error:
+        raise ClockError(f"A fixed host command failed (exit {error.returncode}).") from error
+    except subprocess.TimeoutExpired as error:
+        raise ClockError("A fixed host command timed out.") from error
+
+
+def host_invocation(config):
+    uid = config["uid"]
+    output = run_command([
+        "/usr/bin/systemctl", "--user", f"--machine={uid}@.host", "show",
+        "--property=ActiveState,InvocationID,Description", HOST_UNIT,
+    ], timeout=3)
+    fields = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+    token = fields.get("InvocationID", "")
+    if (fields.get("ActiveState") != "active" or
+            fields.get("Description") != HOST_DESCRIPTION or not TOKEN.fullmatch(token)):
+        raise ClockError("The owned LanView Sunshine session is not active.")
+    return token
+
+
+def read_marker():
+    try:
+        value = protected_json(MARKER)
+    except FileNotFoundError:
+        return None
+    if (set(value) != {"invocationId", "gpuPci", "clockMHz"} or
+            not isinstance(value["invocationId"], str) or not TOKEN.fullmatch(value["invocationId"]) or
+            not isinstance(value["gpuPci"], str) or not PCI.fullmatch(value["gpuPci"]) or
+            type(value["clockMHz"]) is not int or not 300 <= value["clockMHz"] <= 3000):
+        raise ClockError("Invalid GPU clock ownership marker; cleanup was not attempted.")
+    return value
+
+
+def write_marker(config, token):
+    secure_directory(RUNTIME)
+    fd, temporary = tempfile.mkstemp(prefix=".applied-", dir=RUNTIME)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump({"invocationId": token, "gpuPci": config["gpuPci"],
+                       "clockMHz": config["clockMHz"]}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, MARKER)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def reset_marker(marker):
+    # Never erase ownership until the driver confirms restoration.
+    run_command(["/usr/bin/nvidia-smi", "-i", marker["gpuPci"], "-rgc", "--error-on-warning"], timeout=7)
+    MARKER.unlink()
+
+
+def reset():
+    token = invocation_id()
+    marker = read_marker()
+    if marker is None:
+        return
+    if marker["invocationId"] != token:
+        raise ClockError("Clock ownership changed; leaving its marker and settings intact.")
+    reset_marker(marker)
+
+
+def lease():
+    token = invocation_id()
+    config = read_config()
+    host_token = host_invocation(config)
+    # A failed prior reset is retried before this fixed unit can apply new clocks.
+    previous = read_marker()
+    if previous is not None:
+        reset_marker(previous)
+    write_marker(config, token)
+    output = run_command(["/usr/bin/nvidia-smi", "-i", config["gpuPci"], "-lgc",
+                          f"{config['clockMHz']},{config['clockMHz']}"], timeout=7)
+    if not re.search(r"^GPU clocks set to ", output, re.MULTILINE):
+        raise ClockError("The NVIDIA tool did not confirm GPU clock application.")
+    if host_invocation(config) != host_token:
+        raise ClockError("The LanView session changed while applying GPU clocks.")
+    print("READY", flush=True)
+    deadline = time.monotonic() + LEASE_SECONDS
+    next_check = time.monotonic() + CHECK_SECONDS
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            raise ClockError("The GPU clock lease expired.")
+        if now >= next_check:
+            if host_invocation(config) != host_token:
+                raise ClockError("The LanView session changed; ending its GPU clock lease.")
+            next_check = time.monotonic() + CHECK_SECONDS
+            continue
+        ready, _, _ = select.select([sys.stdin.fileno()], [], [], min(deadline, next_check) - now)
+        if ready:
+            data = os.read(sys.stdin.fileno(), 65)
+            if not data:
+                return
+            if len(data) > 64 or data.strip(b"\n"):
+                raise ClockError("Only empty GPU clock heartbeat lines are accepted.")
+            deadline = time.monotonic() + LEASE_SECONDS
+
+
+def hold():
+    config = read_config()
+    sudo_uid = os.environ.get("SUDO_UID", "")
+    if not sudo_uid.isascii() or not sudo_uid.isdecimal() or int(sudo_uid) != config["uid"]:
+        raise ClockError("Only the configured desktop user can acquire this lease through sudo.")
+    # This name cannot run concurrently; systemd also serializes ExecStopPost before a new start.
+    command = [
+        "/usr/bin/systemd-run", "--system", "--quiet", "--collect", "--pipe", "--wait",
+        f"--unit={UNIT}", "--description=LanView GPU clock lease", "--service-type=exec",
+        "--property=Restart=no", "--property=KillMode=control-group",
+        "--property=TimeoutStopSec=10s", "--property=UMask=0077",
+        "--property=RuntimeDirectory=lanview-gpu-clock", "--property=RuntimeDirectoryMode=0700",
+        "--property=RuntimeDirectoryPreserve=yes", "--property=NoNewPrivileges=yes",
+        "--property=PrivateTmp=yes", "--property=ProtectHome=read-only", "--property=ProtectSystem=full",
+        f"--property=ExecStopPost={HELPER} reset", "--", HELPER, "lease",
+    ]
+    return subprocess.call(command, env=ENV)
+
+
+def main():
+    if os.geteuid() != 0:
+        raise ClockError("Use the narrowly scoped sudo hold command installed for the desktop user.")
+    if len(sys.argv) != 2 or sys.argv[1] not in {"hold", "lease", "reset"}:
+        raise ClockError("Usage: lanview-gpu-clock hold")
+    result = {"hold": hold, "lease": lease, "reset": reset}[sys.argv[1]]()
+    return 0 if result is None else result
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ClockError, OSError, ValueError, KeyError) as error:
+        print(f"LanView GPU: {error}", file=sys.stderr, flush=True)
+        sys.exit(1)

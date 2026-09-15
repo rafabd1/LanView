@@ -18,6 +18,7 @@ public sealed class SessionController : IDisposable
     private Task? videoObservation;
     private bool disposed;
     private ClipboardBridge? clipboard;
+    private ViewerWindowTracker? viewerWindow;
 
     public event Action<string>? Log;
     public event Action<SessionStatus>? StatusChanged;
@@ -243,7 +244,16 @@ public sealed class SessionController : IDisposable
             WorkingDirectory = ViewerState.Prepare()
         };
         foreach (var argument in ViewerArguments(profile, pairing)) info.ArgumentList.Add(argument);
-        return Process.Start(info) ?? throw new IOException("Não foi possível abrir o Moonlight.");
+        var process = Process.Start(info) ?? throw new IOException("Não foi possível abrir o Moonlight.");
+        if (!pairing)
+        {
+            try { viewerWindow = new ViewerWindowTracker(process.Id, message => Log?.Invoke(message)); }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+            {
+                Log?.Invoke("Não foi possível acompanhar o tamanho da janela. O vídeo continua disponível.");
+            }
+        }
+        return process;
     }
 
     public static IReadOnlyList<string> ViewerArguments(Profile profile, bool pairing)
@@ -334,6 +344,8 @@ public sealed class SessionController : IDisposable
         {
             try
             {
+                viewerWindow?.Dispose();
+                viewerWindow = null;
                 await EndOwnedProcessAsync(ownedViewer, closeInput: false);
                 ownedViewer.Dispose();
                 viewer = null;
@@ -452,6 +464,8 @@ public sealed class SessionController : IDisposable
         if (disposed) return;
         disposed = true;
         lifetime?.Cancel();
+        viewerWindow?.Dispose();
+        viewerWindow = null;
         // Normal UI shutdown awaits DisconnectAsync. Abnormal disposal breaks the lease too.
         try { lease?.StandardInput.Close(); } catch (Exception ex) when (ex is IOException or InvalidOperationException) { }
     }
