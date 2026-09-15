@@ -24,7 +24,8 @@ public sealed class MainForm : Form
     private readonly Button _disconnect = ActionButton("Desconectar");
     private readonly Button _openMoonlight = ActionButton("Parear");
     private readonly ToolTip _tips = new();
-    private readonly NotifyIcon _tray = new() { Icon = SystemIcons.Application, Text = "LanView" };
+    private readonly Icon _applicationIcon = AppIcon.Load();
+    private readonly NotifyIcon _tray = new() { Text = "LanView" };
     private readonly CheckBox _shareClipboard = new()
     {
         Text = "Sincronizar texto e arquivos copiados durante a sessão",
@@ -35,10 +36,13 @@ public sealed class MainForm : Form
     private bool _closing;
     private bool _closeRequested;
     private bool _allowClose;
+    private bool _resourcesDisposed;
 
     public MainForm()
     {
         Text = "LanView";
+        Icon = _applicationIcon;
+        _tray.Icon = _applicationIcon;
         BackColor = Background;
         ForeColor = Foreground;
         Font = new Font("Segoe UI", 10);
@@ -429,15 +433,19 @@ public sealed class MainForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !_resourcesDisposed)
         {
+            _resourcesDisposed = true;
             _controller.Log -= OnControllerLog;
             _controller.StatusChanged -= OnControllerStatus;
             _controller.SessionEnded -= OnSessionEnded;
             _controller.Dispose();
             _tray.Visible = false;
+            _tray.Icon = null;
             _tray.ContextMenuStrip?.Dispose();
             _tray.Dispose();
+            Icon = null;
+            _applicationIcon.Dispose();
             _tips.Dispose();
         }
         base.Dispose(disposing);

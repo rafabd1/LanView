@@ -11,5 +11,9 @@
     <Version>0.1.0</Version>
     <Product>LanView</Product>
     <Description>Uma janela para seu desktop Linux na rede local.</Description>
+    <ApplicationIcon>Assets\LanView.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\LanView.ico" LogicalName="LanView.Windows.Assets.LanView.ico" />
+  </ItemGroup>
 </Project>

@@ -1,8 +1,71 @@
 using LanView.Windows;
+using System.Drawing;
 
 var failures = 0;
 var passed = 0;
 var privateProfile = new Profile("192.168.50.100", "test_user", "");
+
+Run("Application icon is embedded as a complete multi-size ICO", () =>
+{
+    var assembly = typeof(AppIcon).Assembly;
+    Require(assembly.GetManifestResourceNames().Contains(AppIcon.ResourceName),
+        "The application icon is not embedded with its stable resource name.");
+    using var stream = assembly.GetManifestResourceStream(AppIcon.ResourceName)!;
+    using var reader = new BinaryReader(stream);
+    Require(reader.ReadUInt16() == 0 && reader.ReadUInt16() == 1, "Invalid ICO header.");
+    var count = reader.ReadUInt16();
+    Require(count >= 4 && 6L + count * 16 <= stream.Length, "The ICO image directory is incomplete.");
+    var sizes = new HashSet<int>();
+    var directoryEnd = 6L + count * 16;
+    for (var index = 0; index < count; index++)
+    {
+        var widthByte = reader.ReadByte();
+        var heightByte = reader.ReadByte();
+        var width = widthByte == 0 ? 256 : widthByte;
+        var height = heightByte == 0 ? 256 : heightByte;
+        reader.ReadBytes(6); // Color count, reserved byte, planes and bit depth.
+        var bytes = reader.ReadUInt32();
+        var offset = reader.ReadUInt32();
+        Require(width == height, "Application icon images must be square.");
+        Require(bytes >= 8 && offset >= directoryEnd && (long)offset + bytes <= stream.Length,
+            "An ICO image points outside the embedded resource.");
+        sizes.Add(width);
+        var nextEntry = stream.Position;
+        stream.Position = offset;
+        var header = reader.ReadBytes(8);
+        var isPng = header.SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+        var isDib = BitConverter.ToUInt32(header) is 40 or 108 or 124;
+        Require(isPng || isDib, "An ICO image is neither PNG nor a DIB bitmap.");
+        if (isPng)
+        {
+            // Decode each frame, including 256px entries encoded as zero in ICO.
+            stream.Position = offset;
+            using var pngStream = new MemoryStream(reader.ReadBytes(checked((int)bytes)));
+            using var image = Image.FromStream(pngStream);
+            Require(image.Width == width && image.Height == height,
+                "A PNG frame does not match its ICO directory dimensions.");
+        }
+        stream.Position = nextEntry;
+    }
+    foreach (var size in new[] { 16, 32, 48, 256 })
+        Require(sizes.Contains(size), $"The application icon is missing its {size}px image.");
+});
+
+Run("Application icons survive stream closure and have independent lifetimes", () =>
+{
+    using var first = AppIcon.Load();
+    using var second = AppIcon.Load();
+    Require(!ReferenceEquals(first, second) && first.Handle != second.Handle,
+        "Icon loads must return separately owned native resources.");
+    first.Dispose();
+    foreach (var size in new[] { 16, 32, 48, 128 })
+    {
+        using var resized = new Icon(second, size, size);
+        using var bitmap = resized.ToBitmap();
+        Require(bitmap.Width == size && bitmap.Height == size,
+            $"The {size}px icon decoded as {bitmap.Width}x{bitmap.Height} after the resource stream closes.");
+    }
+});
 
 Run("Private IPv4 addresses", () =>
 {

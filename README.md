@@ -50,6 +50,8 @@ dotnet run --project tests/LanView.Tests -c Debug
 dotnet run --project tests/LanView.Clipboard.Tests -c Debug
 ```
 
+The icon artwork and multi-size Windows icon are in `src/LanView.Windows/Assets`. To regenerate the ICO from the PNG, run `pwsh -File scripts/build-icon.ps1` on Windows.
+
 The build writes `artifacts/LanView-0.1.0-win-x64.zip` and the accompanying `MoonlightSrc-6.1.0.tar.gz` source archive. The ZIP contains a self-contained Windows executable, clean upstream Moonlight files, Linux helper sources, license notices and a LanView source snapshot. It does not include profiles or pairing state.
 
 The script accepts `-MoonlightArchive` and `-MoonlightSourceArchive` paths for cached official downloads. Both archives must match the pinned SHA256 values. `-Offline` disables build downloads and uses locally cached .NET 10.0.11 runtime packs. Without that switch, the build may fetch missing archives and build-time packages. Linux setup still needs the packages and build tools listed in the host guide.

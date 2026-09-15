@@ -44,6 +44,10 @@ try {
         Assert-That ($entries.ContainsKey($required)) "Required package entry missing: $required"
     }
     $manifest = Read-Entry $entries['bundle.json'] | ConvertFrom-Json
+    foreach ($iconFile in @('assets/LanView.ico', 'source/LanView/src/LanView.Windows/Assets/LanView.ico', 'source/LanView/src/LanView.Windows/Assets/LanView.png', 'source/LanView/scripts/build-icon.ps1')) {
+        Assert-That ($entries.ContainsKey($iconFile)) "Icon asset or source missing: $iconFile"
+    }
+    Assert-That ((Get-EntryHash $entries['assets/LanView.ico']) -eq (Get-EntryHash $entries['source/LanView/src/LanView.Windows/Assets/LanView.ico'])) 'Shortcut icon differs from the application source icon.'
     Assert-That ($manifest.selfContained -and -not $manifest.trimmed -and $manifest.dotnetRuntime -eq '10.0.11') 'The runtime manifest does not describe the requested untrimmed self-contained build.'
     $moonlightFiles = 0
     foreach ($entry in $upstreamArchive.Entries) {

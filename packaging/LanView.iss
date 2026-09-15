@@ -25,8 +25,9 @@ OutputBaseFilename=LanView-{#ProductVersion}-Setup-win-x64
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile={#BundleDir}\assets\LanView.ico
 UninstallDisplayName=LanView
-UninstallDisplayIcon={app}\LanView.exe
+UninstallDisplayIcon={app}\assets\LanView.ico
 UninstallFilesDir={app}\uninstall
 CloseApplications=no
 RestartApplications=no
@@ -45,8 +46,8 @@ Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Source: "compiler:license.txt"; DestDir: "{app}\licenses\inno-setup"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\LanView"; Filename: "{app}\LanView.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\LanView"; Filename: "{app}\LanView.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\LanView"; Filename: "{app}\LanView.exe"; WorkingDir: "{app}"; IconFilename: "{app}\assets\LanView.ico"
+Name: "{autodesktop}\LanView"; Filename: "{app}\LanView.exe"; WorkingDir: "{app}"; IconFilename: "{app}\assets\LanView.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\LanView.exe"; Description: "{cm:LaunchProgram,LanView}"; Flags: nowait postinstall skipifsilent unchecked

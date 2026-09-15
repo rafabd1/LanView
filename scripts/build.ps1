@@ -50,6 +50,8 @@ function Get-SourceFiles {
             $entry
         } elseif ($entry.FullName -match '[\\/]host[\\/]clipboard[\\/]protocols[\\/][^\\/]+\.xml$') {
             $entry
+        } elseif ($entry.FullName -match '[\\/]src[\\/]LanView\.Windows[\\/]Assets[\\/]LanView\.png$') {
+            $entry
         } elseif (-not $entry.Extension -and $entry.Name -like 'lanview-*') {
             # Extensionless host entry points must be scripts, not installed binaries or state.
             if ((Get-Content -LiteralPath $entry.FullName -TotalCount 1) -match '^#!') { $entry }
@@ -104,6 +106,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Restore failed. Offline builds require the .NE
 & dotnet publish $snapshotProject -c Release -r win-x64 --self-contained true --no-restore --artifacts-path (Join-Path $buildRoot 'dotnet') -o $bundle -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:RuntimeFrameworkVersion=$runtimeVersion" -p:DebugType=none -p:DebugSymbols=false --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 if (-not (Test-Path -LiteralPath (Join-Path $bundle 'LanView.exe') -PathType Leaf)) { throw 'Published executable is missing.' }
+$iconDirectory = Join-Path $bundle 'assets'
+New-Item -ItemType Directory -Path $iconDirectory -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $lanviewSource 'src\LanView.Windows\Assets\LanView.ico') -Destination (Join-Path $iconDirectory 'LanView.ico')
 $moonlightDirectory = Join-Path $bundle 'tools\Moonlight'
 [IO.Compression.ZipFile]::ExtractToDirectory($clientArchive, $moonlightDirectory)
 if (-not (Test-Path -LiteralPath (Join-Path $moonlightDirectory 'Moonlight.exe') -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $moonlightDirectory 'portable.dat') -PathType Leaf)) { throw 'The official Moonlight archive has an unexpected layout.' }
