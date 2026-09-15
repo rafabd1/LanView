@@ -1,0 +1,33 @@
+**/bin/
+**/obj/
+/artifacts/
+/work/
+*.user
+*.log
+profile.json
+host.conf
+credentials.json
+sunshine_state.json
+credentials/
+**/__pycache__/
+*.pyc
+**/Moonlight Game Streaming Project/
+
+# Local settings, credentials and received files must stay outside the source tree.
+.env
+.env.*
+!.env.example
+.config/
+.cache/
+.ssh/
+*.pem
+*.key
+*.pfx
+*.p12
+*.ppk
+*.dmp
+id_rsa*
+id_ecdsa*
+id_ed25519*
+Moonlight.ini
+portable.dat

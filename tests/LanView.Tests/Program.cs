@@ -1,0 +1,234 @@
+using LanView.Windows;
+
+var failures = 0;
+var passed = 0;
+var privateProfile = new Profile("192.168.50.100", "test_user", "");
+
+Run("Private IPv4 addresses", () =>
+{
+    foreach (var host in new[] { "10.1.2.3", "172.16.1.2", "172.31.254.1", "192.168.50.100" })
+    {
+        Require((privateProfile with { Host = host }).Validate(false) is null,
+            $"Rejected private IPv4 address: {host}");
+    }
+});
+
+Run("Reject public, loopback and ambiguous addresses", () =>
+{
+    foreach (var host in new[]
+    {
+        "8.8.8.8", "172.15.1.1", "172.32.1.1", "127.0.0.1", "0.0.0.0",
+        "169.254.1.1", "::1", "fe80::1", "localhost", "10.1", "192.168.050.100",
+        "0x0a000001", "10.1.1.1;echo test", "10.1.1.1\n", ""
+    })
+    {
+        Require((privateProfile with { Host = host }).Validate(false) is not null,
+            $"Accepted invalid LAN address: {host}");
+    }
+});
+
+Run("SSH user validation", () =>
+{
+    foreach (var user in new[] { "test_user", "user-name", "User1", "_service" })
+    {
+        Require((privateProfile with { User = user }).Validate(false) is null,
+            $"Rejected valid username: {user}");
+    }
+    foreach (var user in new[]
+    {
+        "", "-oProxyCommand=echo", "user;echo", "test user", "user@host",
+        "user\n", "user`id`", "$(id)", "user/other", new string('a', 80)
+    })
+    {
+        Require((privateProfile with { User = user }).Validate(false) is not null,
+            "Accepted a malformed SSH username.");
+    }
+});
+
+Run("Profile normalization", () =>
+{
+    var normalized = new Profile(" 10.1.2.3 ", " test_user ", " C:\\Apps\\Moonlight.exe ").Normalize();
+    Require(normalized.Host == "10.1.2.3" && normalized.User == "test_user"
+        && normalized.MoonlightPath == "C:\\Apps\\Moonlight.exe", "Whitespace was not normalized.");
+    Require(new Profile(null!, null!, null!).Normalize() == Profile.Empty,
+        "Missing serialized profile values were not normalized.");
+    Require(ProfileStore.FilePath == Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".config", "LanView", "profile.json"),
+        "The profile must use the same user directory when launched from different applications.");
+});
+
+Run("Moonlight path validation does not execute files", () =>
+{
+    var testDirectory = Path.Combine(Path.GetTempPath(), $"LanView-tests-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(testDirectory);
+    var executable = Path.Combine(testDirectory, "Moonlight test.exe");
+    try
+    {
+        Require(privateProfile.Validate(false) is null, "Inspection unexpectedly needs Moonlight.");
+        Require(privateProfile.Validate() is not null, "Streaming accepted a missing executable.");
+        Require((privateProfile with { MoonlightPath = "Moonlight.exe" }).Validate() is not null,
+            "Streaming accepted a relative executable path.");
+        Require((privateProfile with { MoonlightPath = executable }).Validate() is not null,
+            "Streaming accepted a nonexistent executable.");
+        File.WriteAllBytes(executable, []);
+        Require((privateProfile with { MoonlightPath = executable }).Validate() is null,
+            "Rejected an existing absolute .exe path containing spaces.");
+        Require((privateProfile with { MoonlightPath = executable + ".cmd" }).Validate() is not null,
+            "Accepted a non-executable extension.");
+    }
+    finally
+    {
+        if (File.Exists(executable)) File.Delete(executable);
+        Directory.Delete(testDirectory);
+    }
+});
+
+Run("Bundled viewer overrides an old saved installation path", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"LanView-bundle-test-{Guid.NewGuid():N}");
+    var viewerDirectory = Path.Combine(root, "tools", "Moonlight");
+    var viewer = Path.Combine(viewerDirectory, "Moonlight.exe");
+    const string oldPath = @"C:\Old application\Moonlight.exe";
+    Directory.CreateDirectory(viewerDirectory);
+    try
+    {
+        Require(ProfileStore.ResolveMoonlightPath(oldPath, root) == oldPath,
+            "Source builds lost the saved development viewer path.");
+        File.WriteAllBytes(viewer, []);
+        Require(ProfileStore.ResolveMoonlightPath(oldPath, root) == viewer,
+            "The installed bundle did not replace the old viewer path.");
+        Require(ProfileStore.ResolveMoonlightPath("", root) == viewer,
+            "A fresh install required a separately selected viewer.");
+    }
+    finally
+    {
+        if (File.Exists(viewer)) File.Delete(viewer);
+        Directory.Delete(viewerDirectory);
+        Directory.Delete(Path.Combine(root, "tools"));
+        Directory.Delete(root);
+    }
+});
+
+Run("Reject malformed host status without throwing", () =>
+{
+    foreach (var json in new[]
+    {
+        "", "{", "null", "true", "42", "\"text\"", "[]", "{}",
+        "{\"running\":true}",
+        "{\"running\":\"true\",\"gpuRuntimeStatus\":\"active\"}",
+        "{\"running\":true,\"gpuRuntimeStatus\":null}",
+        "{\"running\":true,\"gpuRuntimeStatus\":42}"
+    })
+    {
+        Require(!SessionController.TryParseStatus(json, out var status) && status is null,
+            "Accepted malformed status or returned a partial result.");
+    }
+});
+
+Run("Host status and GPU power states", () =>
+{
+    foreach (var (raw, expected) in new[]
+    {
+        ("active", "ativa"), ("suspended", "suspensa"), ("suspending", "suspendendo"),
+        ("resuming", "ativando"), ("unknown", "desconhecida")
+    })
+    {
+        var json = $$"""{"running":false,"gpuRuntimeStatus":"{{raw}}"}""";
+        Require(SessionController.TryParseStatus(json, out var status), "Rejected a valid host status.");
+        Require(status!.State == "Parado" && status.GpuState == expected,
+            "Incorrect host or GPU state.");
+    }
+    Require(SessionController.TryParseStatus("{\"running\":true,\"gpuRuntimeStatus\":\"active\"}", out var active)
+        && active!.State == "Host ativo", "A running host was not identified.");
+    Require(SessionController.TryParseStatus("{\"running\":true,\"gpuRuntimeStatus\":\"suspended\"}", out var suspended)
+        && suspended!.State == "Host ativo" && suspended.GpuState == "suspensa",
+        "Starting the host must not imply that the GPU is active.");
+});
+
+Run("Local disconnect does not claim a remote GPU state", () =>
+{
+    using var controller = new SessionController();
+    SessionStatus? observed = null;
+    controller.StatusChanged += status => observed = status;
+    controller.DisconnectAsync().GetAwaiter().GetResult();
+    Require(observed is not null && observed.GpuState == "não consultada",
+        "Disconnect reported an unobserved remote GPU state.");
+});
+
+Run("Disposed controller rejects inspection before validation", () =>
+{
+    using var controller = new SessionController();
+    controller.Dispose();
+    try
+    {
+        // An empty profile also prevents any network access if this guard regresses.
+        controller.InspectAsync(Profile.Empty).GetAwaiter().GetResult();
+        throw new InvalidOperationException("Inspection succeeded after disposal.");
+    }
+    catch (ObjectDisposedException) { }
+});
+
+Run("Pairing uses the upstream client", () =>
+{
+    var args = SessionController.ViewerArguments(privateProfile, pairing: true);
+    Require(args.SequenceEqual(new[] { "pair", privateProfile.Host }),
+        "Pairing must invoke Moonlight pair with exactly one target host.");
+});
+
+Run("Desktop stream quality and input settings", () =>
+{
+    var args = SessionController.ViewerArguments(privateProfile, pairing: false);
+    Require(args.Take(3).SequenceEqual(new[] { "stream", privateProfile.Host, "Desktop" }),
+        "Stream target must be the selected host's Desktop app.");
+    Require(args.Contains("--1080") && ValueAfter(args, "--fps") == "60", "Unexpected resolution or frame rate.");
+    Require(ValueAfter(args, "--video-codec") == "HEVC" && args.Contains("--yuv444"),
+        "The desktop stream lost its HEVC 4:4:4 request.");
+    Require(ValueAfter(args, "--video-decoder") == "hardware", "Hardware decoding was not requested.");
+    Require(ValueAfter(args, "--display-mode") == "windowed" && args.Contains("--absolute-mouse"),
+        "The stream must open in a window with absolute mouse input.");
+    Require(ValueAfter(args, "--capture-system-keys") == "always", "Focused remote window must receive system shortcuts.");
+    Require(args.Contains("--no-frame-pacing"), "The low-latency pacing preference was lost.");
+});
+
+Run("Viewer state keeps identity and disables presence sharing", () =>
+{
+    const string fixture = "[General]\nidentity=fixture-only\n[streamsettings]\nrichpresence=true\nother=value\n";
+    var updated = ViewerState.SetIniValue(fixture, "streamsettings", "richpresence", "false");
+    Require(updated.Contains("identity=fixture-only") && updated.Contains("other=value"), "Unrelated settings were lost.");
+    Require(updated.Contains("richpresence=false") && !updated.Contains("richpresence=true"), "Presence was not disabled.");
+    Require(ViewerState.SetIniValue(updated, "streamsettings", "richpresence", "false") == updated, "Settings update is not idempotent.");
+    Require(ViewerState.SetIniValue("", "streamsettings", "richpresence", "false").Contains("[streamsettings]\nrichpresence=false"), "Empty settings were not initialized.");
+});
+
+Console.WriteLine($"{passed} passed; {failures} failed. No network connections or remote input were used.");
+return failures == 0 ? 0 : 1;
+
+void Run(string name, Action test)
+{
+    try
+    {
+        test();
+        passed++;
+        Console.WriteLine($"PASS {name}");
+    }
+    catch (Exception ex)
+    {
+        failures++;
+        Console.Error.WriteLine($"FAIL {name}: {ex.Message}");
+    }
+}
+
+static void Require(bool condition, string message)
+{
+    if (!condition) throw new InvalidOperationException(message);
+}
+
+static string? ValueAfter(IReadOnlyList<string> args, string option)
+{
+    for (var index = 0; index + 1 < args.Count; index++)
+    {
+        if (args[index] == option) return args[index + 1];
+    }
+    return null;
+}

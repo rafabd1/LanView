@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+# Starts the installed Sunshine host. No network listener is implemented here.
+set -euo pipefail
+
+readonly LV_UNIT=app-dev.lizardbyte.app.Sunshine-LanView.service
+readonly LV_DESCRIPTION='LanView Sunshine session'
+readonly LV_LEASE_SECONDS=35
+
+fail() { printf 'LanView: %s\n' "$*" >&2; return 1; }
+
+is_private_ipv4() {
+    local address=$1 a b c d part
+    [[ $address =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS=. read -r a b c d <<< "$address"
+    for part in "$a" "$b" "$c" "$d"; do
+        (( 10#$part <= 255 )) || return 1
+        [[ $part == 0 || $part != 0* ]] || return 1
+    done
+    (( 10#$a == 10 || (10#$a == 172 && 10#$b >= 16 && 10#$b <= 31) ||
+       (10#$a == 192 && 10#$b == 168) ))
+}
+
+read_profile() {
+    local profile=$1 line key value
+    lv_capture=portal
+    lv_output=
+    lv_bind=
+    [[ -e $profile ]] || return 0
+    [[ -f $profile && ! -L $profile && -O $profile ]] ||
+        { fail 'The host profile must be a regular file owned by this user.'; return 1; }
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        [[ -z $line || $line == \#* ]] && continue
+        [[ $line == *=* ]] || { fail 'Invalid line in host.conf.'; return 1; }
+        key=${line%%=*}
+        value=${line#*=}
+        case $key in
+            capture)
+                [[ $value == portal || $value == kms ]] ||
+                    { fail 'capture must be portal or kms.'; return 1; }
+                lv_capture=$value ;;
+            output_name)
+                [[ $value =~ ^[A-Za-z0-9_.:-]*$ ]] ||
+                    { fail 'Invalid output_name in host.conf.'; return 1; }
+                lv_output=$value ;;
+            bind_address)
+                is_private_ipv4 "$value" ||
+                    { fail 'bind_address must be a private LAN IPv4 address.'; return 1; }
+                lv_bind=$value ;;
+            *) fail "Unknown host profile key: $key"; return 1 ;;
+        esac
+    done < "$profile"
+}
+
+# PCI runtime_status is a cached kernel attribute; this does not open a GPU device.
+gpu_state() {
+    local pci_root=${1:-/sys/bus/pci/devices} device vendor class state
+    lv_gpu_pci=
+    lv_gpu_status=unavailable
+    for device in "$pci_root"/*; do
+        [[ -r $device/vendor && -r $device/class ]] || continue
+        read -r vendor < "$device/vendor"
+        read -r class < "$device/class"
+        [[ $vendor == 0x10de && $class == 0x03* ]] || continue
+        if [[ -n $lv_gpu_pci ]]; then
+            lv_gpu_pci=
+            lv_gpu_status=multiple
+            return
+        fi
+        lv_gpu_pci=${device##*/}
+        [[ $lv_gpu_pci =~ ^[0-9a-fA-F:.]+$ ]] || lv_gpu_pci=
+        if [[ -r $device/power/runtime_status ]]; then
+            read -r state < "$device/power/runtime_status"
+            case $state in
+                active|suspended|suspending|resuming|unsupported|error)
+                    lv_gpu_status=$state ;;
+                *) lv_gpu_status=unknown ;;
+            esac
+        fi
+    done
+}
+
+unit_state() {
+    lv_unit_state=$(systemctl --user show "$LV_UNIT" --property=ActiveState --value 2>/dev/null) || lv_unit_state=inactive
+    case $lv_unit_state in
+        active|activating|deactivating|failed|inactive) ;;
+        *) lv_unit_state=inactive ;;
+    esac
+}
+
+print_status() {
+    local running=false
+    unit_state
+    [[ $lv_unit_state == active || $lv_unit_state == activating ]] && running=true
+    gpu_state
+    printf '{"running":%s,"state":"%s","gpuRuntimeStatus":"%s","gpuPci":"%s","capture":"%s"}\n' \
+        "$running" "$lv_unit_state" "$lv_gpu_status" "$lv_gpu_pci" "$lv_capture"
+}
+
+owned_unit() {
+    local description
+    description=$(systemctl --user show "$LV_UNIT" --property=Description --value 2>/dev/null) || return 1
+    [[ $description == "$LV_DESCRIPTION" ]]
+}
+
+stop_host() {
+    unit_state
+    if [[ $lv_unit_state == active || $lv_unit_state == activating || $lv_unit_state == deactivating ]]; then
+        owned_unit || { fail 'The service name belongs to another unit; leaving it unchanged.'; return 1; }
+        systemctl --user stop "$LV_UNIT"
+    fi
+}
+
+prepare_paths() {
+    [[ $EUID -ne 0 ]] || { fail 'Run as the desktop user, not root.'; return 1; }
+    lv_config_base=${XDG_CONFIG_HOME:-$HOME/.config}/lanview
+    lv_runtime=${XDG_RUNTIME_DIR:-/run/user/$EUID}
+    [[ $lv_config_base == /* && $lv_runtime == /* && $lv_config_base != *$'\n'* &&
+       $lv_config_base != *$'\r'* && -d $lv_runtime && -O $lv_runtime ]] ||
+        { fail 'A valid user configuration and runtime directory are required.'; return 1; }
+    lv_profile=$lv_config_base/host.conf
+    lv_upstream=$lv_config_base/upstream
+    lv_sunshine_config=$lv_upstream/sunshine/sunshine.conf
+    read_profile "$lv_profile"
+}
+
+prepare_session() {
+    local key value socket
+    lv_wayland=${WAYLAND_DISPLAY:-}
+    lv_desktop=${XDG_CURRENT_DESKTOP:-Hyprland}
+    # Read only these session values. Never source systemd's environment output.
+    while IFS='=' read -r key value; do
+        case $key in
+            WAYLAND_DISPLAY) [[ -n $lv_wayland ]] || lv_wayland=$value ;;
+            XDG_CURRENT_DESKTOP) lv_desktop=$value ;;
+        esac
+    done < <(systemctl --user show-environment)
+    if [[ -z $lv_wayland ]]; then
+        local -a sockets=()
+        for socket in "$lv_runtime"/wayland-*; do
+            [[ -S $socket && -O $socket ]] && sockets+=("$socket")
+        done
+        [[ ${#sockets[@]} -eq 1 ]] ||
+            { fail 'No unambiguous Wayland session. Export WAYLAND_DISPLAY in the user service environment.'; return 1; }
+        lv_wayland=${sockets[0]##*/}
+    fi
+    [[ $lv_wayland =~ ^wayland-[A-Za-z0-9_-]+$ && -S $lv_runtime/$lv_wayland &&
+       -O $lv_runtime/$lv_wayland && -S $lv_runtime/bus ]] ||
+        { fail 'The desktop Wayland socket or session bus is unavailable.'; return 1; }
+    [[ $lv_desktop =~ ^[A-Za-z0-9_:.-]+$ ]] ||
+        { fail 'Invalid desktop session name.'; return 1; }
+}
+
+write_config() {
+    [[ -n $lv_bind ]] || { fail "Set bind_address in $lv_profile before starting."; return 1; }
+    umask 077
+    mkdir -p -- "$lv_upstream/sunshine"
+    [[ ! -L $lv_upstream && ! -L $lv_upstream/sunshine && -O $lv_upstream/sunshine ]] ||
+        { fail 'Sunshine configuration directory must be owned by this user.'; return 1; }
+    local temporary
+    temporary=$(mktemp "$lv_upstream/sunshine/.config.XXXXXX")
+    # The profile has a fixed grammar; its values cannot add config directives.
+    {
+        printf '%s\n' '# Generated by lanview-host. Edit ../../host.conf for host settings.'
+        printf 'sunshine_name = LanView\ncapture = %s\nencoder = nvenc\n' "$lv_capture"
+        printf 'bind_address = %s\naddress_family = ipv4\n' "$lv_bind"
+        [[ -z $lv_output ]] || printf 'output_name = %s\n' "$lv_output"
+        printf '%s\n' 'upnp = disabled' 'origin_web_ui_allowed = lan' \
+            'lan_encryption_mode = 2' 'wan_encryption_mode = 2' \
+            'controller = disabled' 'keyboard = enabled' 'mouse = enabled' \
+            'hevc_mode = 0' 'av1_mode = 1' 'nvenc_preset = 1' \
+            'nvenc_twopass = quarter_res' 'nvenc_spatial_aq = disabled' \
+            'system_tray = disabled' 'min_log_level = info' \
+            'file_apps = apps.json' 'credentials_file = credentials.json' \
+            'file_state = sunshine_state.json' 'pkey = credentials/cakey.pem' \
+            'cert = credentials/cacert.pem' 'log_path = sunshine.log'
+    } > "$temporary"
+    mv -f -- "$temporary" "$lv_sunshine_config"
+    if [[ ! -e $lv_upstream/sunshine/apps.json ]]; then
+        printf '%s\n' '{"env":{},"apps":[{"name":"Desktop","image-path":"desktop.png"}]}' \
+            > "$lv_upstream/sunshine/apps.json"
+    fi
+}
+
+check_credentials() {
+    local credentials=$1 mode
+    command -v jq >/dev/null || { fail 'Install jq to validate the upstream credentials file.'; return 1; }
+    [[ -f $credentials && ! -L $credentials && -O $credentials ]] ||
+        { fail 'Create private Web UI credentials with the upstream Sunshine --creds command before starting.'; return 1; }
+    mode=$(stat -c %a -- "$credentials")
+    [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 077) == 0 )) ||
+        { fail 'The Sunshine credentials file must not be accessible by other users (chmod 600).'; return 1; }
+    jq -e 'type == "object" and
+        (.username | type == "string" and length > 0) and
+        (.salt | type == "string" and length >= 16) and
+        (.password | type == "string" and test("^[0-9a-fA-F]{64}$"))' \
+        "$credentials" >/dev/null 2>&1 ||
+        { fail 'The credentials file is incomplete. Provision it with upstream Sunshine --creds.'; return 1; }
+}
+
+lock_host() {
+    command -v flock >/dev/null || { fail 'Missing dependency: flock'; return 1; }
+    umask 077
+    mkdir -p -- "$lv_runtime/lanview"
+    [[ ! -L $lv_runtime/lanview && -O $lv_runtime/lanview ]] ||
+        { fail 'Invalid LanView runtime directory.'; return 1; }
+    exec 9> "$lv_runtime/lanview/host.lock"
+    flock -n 9 || { fail 'Another LanView session owns the host.'; return 1; }
+    unit_state
+    [[ $lv_unit_state != active && $lv_unit_state != activating && $lv_unit_state != deactivating ]] ||
+        { fail 'The LanView host is already running.'; return 1; }
+}
+
+start_host() {
+    local sunshine_binary
+    sunshine_binary=$(command -v sunshine) || { fail 'Install the upstream Sunshine package first.'; return 1; }
+    [[ $sunshine_binary == /* ]] || { fail 'Sunshine must resolve to an installed executable.'; return 1; }
+    for command in systemctl systemd-run flock; do
+        command -v "$command" >/dev/null || { fail "Missing dependency: $command"; return 1; }
+    done
+    lock_host
+    if systemctl --user is-active --quiet app-dev.lizardbyte.app.Sunshine.service; then
+        fail 'The standard Sunshine service is running. Stop it before starting a LanView session.'
+        return 1
+    fi
+    prepare_session
+    write_config
+    check_credentials "$lv_upstream/sunshine/credentials.json"
+    systemd-run --user --quiet --collect --unit="$LV_UNIT" --description="$LV_DESCRIPTION" \
+        --service-type=exec --property=Restart=no --property=KillMode=control-group \
+        --property=TimeoutStopSec=10s --property="WorkingDirectory=$lv_upstream/sunshine" \
+        --setenv="XDG_CONFIG_HOME=$lv_upstream" --setenv="XDG_RUNTIME_DIR=$lv_runtime" \
+        --setenv="WAYLAND_DISPLAY=$lv_wayland" --setenv="XDG_CURRENT_DESKTOP=$lv_desktop" \
+        --setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=$lv_runtime/bus" \
+        -- "$sunshine_binary" "$lv_sunshine_config"
+}
+
+lease_loop() {
+    local heartbeat
+    # Only empty heartbeat lines are accepted. They are never commands.
+    while IFS= read -r -t "$LV_LEASE_SECONDS" heartbeat; do
+        [[ -z $heartbeat ]] || { fail 'Invalid lease heartbeat.'; return 1; }
+        unit_state
+        [[ $lv_unit_state == active || $lv_unit_state == activating ]] || return 1
+    done
+}
+
+main() {
+    [[ $# -eq 1 ]] || { fail 'Usage: lanview-host status|configure|start|run|stop'; return 2; }
+    case $1 in status|configure|start|run|stop) ;; *) fail 'Unknown action.'; return 2 ;; esac
+    prepare_paths
+    case $1 in
+        status) print_status ;;
+        configure) lock_host; write_config; printf '{"configured":true}\n' ;;
+        stop) stop_host; print_status ;;
+        start) start_host; print_status ;;
+        run)
+            start_host
+            trap 'stop_host >/dev/null' EXIT
+            trap 'exit 129' HUP
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+            print_status
+            lease_loop
+            ;;
+    esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main "$@"
+fi

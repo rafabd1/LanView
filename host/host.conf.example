@@ -1,0 +1,6 @@
+# Copy to ~/.config/lanview/host.conf and set this machine's LAN address.
+# Values use key=value, with no surrounding spaces or shell expressions.
+bind_address=192.168.1.100
+capture=portal
+# Leave empty to use the screen selected in the portal.
+output_name=

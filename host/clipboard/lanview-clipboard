@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# -eq 0 && $EUID -ne 0 ]] || { printf 'Run clipboard as the desktop user, with no arguments.\n' >&2; exit 2; }
+runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$EUID}
+export XDG_RUNTIME_DIR=$runtime_dir
+if [[ -z ${WAYLAND_DISPLAY:-} ]]; then
+    while IFS='=' read -r key value; do
+        if [[ $key == WAYLAND_DISPLAY && $value =~ ^wayland-[A-Za-z0-9_-]+$ ]]; then
+            export WAYLAND_DISPLAY=$value
+        fi
+    done < <(systemctl --user show-environment)
+fi
+[[ ${WAYLAND_DISPLAY:-} =~ ^wayland-[A-Za-z0-9_-]+$ && -S $runtime_dir/$WAYLAND_DISPLAY ]] || { printf 'Desktop Wayland session unavailable.\n' >&2; exit 1; }
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+exec python3 "$script_dir/../libexec/lanview/bridge.py"

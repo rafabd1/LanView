@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>LanView</AssemblyName>
+    <RootNamespace>LanView.Windows</RootNamespace>
+    <Version>0.1.0</Version>
+    <Product>LanView</Product>
+    <Description>Uma janela para seu desktop Linux na rede local.</Description>
+  </PropertyGroup>
+</Project>
