@@ -237,13 +237,7 @@ public sealed class SessionController : IDisposable
 
     private Process StartViewer(Profile profile, bool pairing)
     {
-        var info = new ProcessStartInfo(profile.MoonlightPath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = ViewerState.Prepare()
-        };
-        foreach (var argument in ViewerArguments(profile, pairing)) info.ArgumentList.Add(argument);
+        var info = ViewerStartInfo(profile, pairing, ViewerState.Prepare());
         var process = Process.Start(info) ?? throw new IOException("Não foi possível abrir o Moonlight.");
         if (!pairing)
         {
@@ -254,6 +248,24 @@ public sealed class SessionController : IDisposable
             }
         }
         return process;
+    }
+
+    public static ProcessStartInfo ViewerStartInfo(Profile profile, bool pairing, string workingDirectory)
+    {
+        var info = new ProcessStartInfo(profile.MoonlightPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+        foreach (var argument in ViewerArguments(profile, pairing)) info.ArgumentList.Add(argument);
+        if (!pairing)
+        {
+            // SDL's fullscreen Alt+Tab escape keeps other system shortcuts captured.
+            // A child-only environment hint overrides Moonlight's normal-priority hint.
+            info.Environment["SDL_ALLOW_ALT_TAB_WHILE_GRABBED"] = "1";
+        }
+        return info;
     }
 
     public static IReadOnlyList<string> ViewerArguments(Profile profile, bool pairing)

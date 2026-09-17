@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Package = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\LanView-0.1.1-win-x64.zip'),
+    [string]$Package = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\LanView-0.1.2-win-x64.zip'),
     [string]$CompilerPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'work\installer-tools\InnoSetup-6.7.3\ISCC.exe'),
     [Parameter(Mandatory)][string]$MoonlightArchive,
     [string]$MoonlightSourceArchive

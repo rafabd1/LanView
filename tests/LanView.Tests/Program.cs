@@ -254,6 +254,37 @@ Run("Desktop stream quality and input settings", () =>
     Require(args.Contains("--no-frame-pacing"), "The low-latency pacing preference was lost.");
 });
 
+Run("Fullscreen Alt+Tab uses the viewer's native local escape", () =>
+{
+    var info = SessionController.ViewerStartInfo(privateProfile, pairing: false, Path.GetTempPath());
+    Require(info.Environment["SDL_ALLOW_ALT_TAB_WHILE_GRABBED"] == "1",
+        "The fullscreen Alt+Tab escape must be enabled for the video process.");
+    Require(info.ArgumentList.SequenceEqual(SessionController.ViewerArguments(privateProfile, pairing: false)),
+        "The launch configuration changed the stream arguments.");
+    Require(ValueAfter(info.ArgumentList.ToArray(), "--capture-system-keys") == "always",
+        "Other system shortcuts must still reach the remote desktop.");
+    Require(!info.UseShellExecute && info.CreateNoWindow && info.WorkingDirectory == Path.GetTempPath(),
+        "Viewer startup must keep its explicit working directory and avoid a console or shell.");
+});
+
+Run("Alt+Tab override is scoped to streaming, not the launcher or pairing", () =>
+{
+    const string hint = "SDL_ALLOW_ALT_TAB_WHILE_GRABBED";
+    var previous = Environment.GetEnvironmentVariable(hint);
+    try
+    {
+        Environment.SetEnvironmentVariable(hint, "0");
+        var stream = SessionController.ViewerStartInfo(privateProfile, pairing: false, Path.GetTempPath());
+        var pair = SessionController.ViewerStartInfo(privateProfile, pairing: true, Path.GetTempPath());
+        Require(stream.Environment[hint] == "1", "An inherited disabled hint must not prevent local Alt+Tab.");
+        Require(Environment.GetEnvironmentVariable(hint) == "0", "The launcher environment was changed.");
+        Require(pair.Environment[hint] == "0", "Pairing must retain its inherited environment.");
+        Require(pair.ArgumentList.SequenceEqual(new[] { "pair", privateProfile.Host }),
+            "The pairing launch arguments changed.");
+    }
+    finally { Environment.SetEnvironmentVariable(hint, previous); }
+});
+
 Run("Viewer state keeps identity and disables presence sharing", () =>
 {
     const string fixture = "[General]\nidentity=fixture-only\n[streamsettings]\nrichpresence=true\nother=value\n";

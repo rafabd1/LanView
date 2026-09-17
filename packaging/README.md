@@ -1,6 +1,6 @@
 # LanView for Windows
 
-Run `LanView-0.1.1-Setup-win-x64.exe` to install LanView for the current user. It needs no administrator access and includes .NET and Moonlight 6.1.0; there is no separate Moonlight selection or download. The default folder is `%USERPROFILE%\.local\share\LanView\App`. Start LanView from its Start menu or desktop shortcut. Close the app and its video window before upgrading.
+Run `LanView-0.1.2-Setup-win-x64.exe` to install LanView for the current user. It needs no administrator access and includes .NET and Moonlight 6.1.0; there is no separate Moonlight selection or download. The default folder is `%USERPROFILE%\.local\share\LanView\App`. Start LanView from its Start menu or desktop shortcut. Close the app and its video window before upgrading.
 
 For the portable ZIP, extract the whole archive into a writable folder and open `LanView.exe`. Keep the `tools` folder beside it. Both packages use the included Moonlight client automatically and download no components when the app starts.
 
@@ -10,7 +10,7 @@ The Linux computer needs a working Wayland session, Sunshine, NVIDIA NVENC and t
 
 Open LanView, enter the Linux computer's private IPv4 address and SSH username, then save the profile. Use **Parear** (Pair) for the first connection and confirm Moonlight's PIN in Sunshine. **Conectar** (Connect) opens the desktop in Moonlight. **Desconectar** (Disconnect) releases the session. The current Windows interface uses Portuguese labels.
 
-While the video window has focus, keyboard shortcuts go to Linux. Click outside it to return control to Windows; no release shortcut is needed. Windows still handles `Ctrl+Alt+Del`.
+While the video window has focus, keyboard shortcuts go to Linux. In fullscreen, `Alt+Tab` minimizes the video window so you can use Windows; restoring it returns to fullscreen. Other captured shortcuts still go to Linux. In windowed mode, click outside the video to return control to Windows; no release shortcut is needed. Windows still handles `Ctrl+Alt+Del`.
 
 The video window remembers its last normal size and adapts it to the current display scale and available screen area. Fullscreen, maximized and minimized sizes do not replace that preference. The next session starts windowed.
 
