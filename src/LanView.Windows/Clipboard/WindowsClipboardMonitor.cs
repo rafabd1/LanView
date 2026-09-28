@@ -8,12 +8,15 @@ internal sealed record ClipboardSnapshot(string? Text, string[]? Files, string F
 
 internal sealed class WindowsClipboardMonitor : IAsyncDisposable
 {
+    private readonly object lifecycle = new();
     private readonly TaskCompletionSource<ClipboardWindow> ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Action<ClipboardSnapshot> changed;
     private readonly Action<string> status;
     private ApplicationContext? context;
     private readonly Thread thread;
+    private bool started;
+    private Task? shutdown;
 
     public WindowsClipboardMonitor(Action<ClipboardSnapshot> changed, Action<string> status)
     {
@@ -25,7 +28,14 @@ internal sealed class WindowsClipboardMonitor : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellation)
     {
-        thread.Start();
+        cancellation.ThrowIfCancellationRequested();
+        lock (lifecycle)
+        {
+            ObjectDisposedException.ThrowIf(shutdown is not null, this);
+            if (started) throw new InvalidOperationException("O monitor de clipboard já foi iniciado.");
+            thread.Start();
+            started = true;
+        }
         await ready.Task.WaitAsync(cancellation);
     }
 
@@ -57,16 +67,35 @@ internal sealed class WindowsClipboardMonitor : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (!thread.IsAlive) return;
+        // Remote EOF and session cleanup can arrive together. Both must await the same stop.
+        lock (lifecycle) return new(shutdown ??= StopAsync());
+    }
+
+    private async Task StopAsync()
+    {
+        if (!started) return;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         try
         {
-            if (ready.Task.IsCompletedSuccessfully)
-                await ready.Task.Result.InvokeAsync(() => context?.ExitThread());
+            // Disposal may run before the clipboard thread creates its window.
+            await Task.WhenAny(ready.Task, finished.Task).WaitAsync(timeout.Token).ConfigureAwait(false);
+            if (!finished.Task.IsCompleted && ready.Task.IsCompletedSuccessfully)
+            {
+                try
+                {
+                    // Await thread completion, not a UI callback that can be abandoned as its pump exits.
+                    ready.Task.Result.BeginInvoke(() => context?.ExitThread());
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException) { }
+            }
+            await finished.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException) { }
-        await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException("O monitor de clipboard excedeu o prazo de encerramento.");
+        }
     }
 
     private sealed class ClipboardWindow : Form

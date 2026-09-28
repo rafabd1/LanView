@@ -1,6 +1,6 @@
 # LanView for Windows
 
-Run `LanView-0.1.2-Setup-win-x64.exe` to install LanView for the current user. It needs no administrator access and includes .NET and Moonlight 6.1.0; there is no separate Moonlight selection or download. The default folder is `%USERPROFILE%\.local\share\LanView\App`. Start LanView from its Start menu or desktop shortcut. Close the app and its video window before upgrading.
+Run `LanView-0.1.3-Setup-win-x64.exe` to install LanView for the current user. It needs no administrator access and includes .NET and Moonlight 6.1.0; there is no separate Moonlight selection or download. The default folder is `%USERPROFILE%\.local\share\LanView\App`. Start LanView from its Start menu or desktop shortcut. Close the app and its video window before upgrading.
 
 For the portable ZIP, extract the whole archive into a writable folder and open `LanView.exe`. Keep the `tools` folder beside it. Both packages use the included Moonlight client automatically and download no components when the app starts.
 

@@ -409,7 +409,7 @@ public sealed class MainForm : Form
         if (_busy)
         {
             _controller.CancelPendingConnection();
-            AppendLog("Cancelando a abertura e liberando a sessão.");
+            AppendLog("Cancelando a operação e liberando a sessão.");
             return;
         }
 

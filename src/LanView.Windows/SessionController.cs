@@ -337,14 +337,16 @@ public sealed class SessionController : IDisposable
         var ownedLease = lease;
         var ownedViewer = viewer;
         var previousProfile = activeProfile;
+        // A lost lease cannot answer a final status query. Local cleanup must not reconnect to it.
+        var inspectHost = ownedLease is not null && !ownedLease.HasExited;
         var failures = new List<Exception>();
+        lifetime?.Cancel();
         if (clipboard is not null)
         {
             try { await clipboard.StopAsync(); }
             catch (Exception) { Log?.Invoke("A sincronização encerrou com erro. O host de vídeo será liberado."); }
             clipboard = null;
         }
-        lifetime?.Cancel();
         if (videoObservation is not null)
         {
             try { await videoObservation; } catch (Exception) { }
@@ -388,14 +390,14 @@ public sealed class SessionController : IDisposable
         if (ownedLease is not null || ownedViewer is not null) SessionEnded?.Invoke();
         StatusChanged?.Invoke(new("Sessão local encerrada", "não consultada",
             "Processos locais encerrados. O estado do host e da GPU depende da consulta ao Linux."));
-        if (previousProfile is not null)
+        if (inspectHost && previousProfile is not null)
         {
             try { StatusChanged?.Invoke(await ReadStatusAsync(previousProfile)); }
             catch (Exception ex) { Log?.Invoke("Sessão encerrada; não foi possível consultar o estado final: " + ex.Message); }
         }
     }
 
-    private static async Task EndOwnedProcessAsync(Process process, bool closeInput)
+    internal static async Task EndOwnedProcessAsync(Process process, bool closeInput)
     {
         if (process.HasExited) return;
         if (closeInput)
@@ -408,7 +410,7 @@ public sealed class SessionController : IDisposable
         {
             // This Process object belongs to this session; never terminate by process name.
             if (!process.HasExited) process.Kill(entireProcessTree: false);
-            await process.WaitForExitAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
         }
     }
 

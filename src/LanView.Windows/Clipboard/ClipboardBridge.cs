@@ -414,7 +414,7 @@ public sealed class ClipboardBridge : IAsyncDisposable, IDisposable
                 catch (TimeoutException)
                 {
                     if (!process.HasExited) process.Kill(entireProcessTree: false);
-                    await process.WaitForExitAsync();
+                    await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
                 }
             }
             process.Dispose();
