@@ -334,6 +334,52 @@ Run("Viewer window dimensions reject invalid or unbounded values", () =>
     }) Require(!size.IsValid, "An invalid window size was accepted.");
 });
 
+Run("Viewer window restores saved position instead of the startup position", () =>
+{
+    var saved = new ViewerWindowSize(1200, 800, 96, 420, 160);
+    Require(saved.SavedBounds == new Rectangle(420, 160, 1200, 800), "Saved coordinates were lost.");
+    var restored = saved.FitToWorkingArea(new(10, 20, 900, 600), new(0, 0, 1920, 1040), 96);
+    Require(restored == saved.SavedBounds, "The viewer kept its default startup position.");
+    Require(saved != (saved with { X = 421 }), "Moving without resizing must change the saved state.");
+});
+
+Run("Viewer window position supports monitors to the left and above the primary display", () =>
+{
+    var saved = new ViewerWindowSize(1000, 700, 96, -1700, -900);
+    var area = new Rectangle(-1920, -1080, 1920, 1040);
+    var restored = saved.FitToWorkingArea(new(200, 100, 900, 600), area, 96);
+    Require(saved.IsValid && restored == saved.SavedBounds, "Negative saved coordinates did not restore.");
+});
+
+Run("Viewer window position stays visible after monitor removal or work-area changes", () =>
+{
+    var saved = new ViewerWindowSize(1200, 800, 96, -1700, -900);
+    var area = new Rectangle(40, 30, 1240, 690);
+    var restored = saved.FitToWorkingArea(new(100, 100, 900, 600), area, 96);
+    Require(restored == new Rectangle(40, 30, 1200, 690), "An unavailable monitor left the viewer off-screen.");
+    var lowerRight = saved with { X = 3000, Y = 2000, Width = 800, Height = 500 };
+    Require(lowerRight.FitToWorkingArea(Rectangle.Empty, area, 96) == new Rectangle(480, 220, 800, 500),
+        "The taskbar or right/bottom screen edge was not respected.");
+});
+
+Run("Viewer window position uses desktop coordinates while dimensions scale with DPI", () =>
+{
+    var saved = new ViewerWindowSize(1000, 700, 96, 2100, 150);
+    var area = new Rectangle(1920, 0, 2560, 1400);
+    var restored = saved.FitToWorkingArea(new(100, 50, 900, 600), area, 144);
+    Require(restored == new Rectangle(2100, 150, 1500, 1050), "Position was scaled as if it were a size.");
+});
+
+Run("Viewer window position rejects incomplete coordinates and integer overflow", () =>
+{
+    foreach (var saved in new[]
+    {
+        new ViewerWindowSize(800, 600, 96, 100, null), new ViewerWindowSize(800, 600, 96, null, 100),
+        new ViewerWindowSize(800, 600, 96, int.MaxValue, 0), new ViewerWindowSize(800, 600, 96, 0, int.MinValue)
+    }) Require(!saved.IsValid && saved.SavedBounds is null, "Invalid coordinates were accepted.");
+    Require(new ViewerWindowSize(800, 600, 96).SavedBounds is null, "Old size-only state invented a position.");
+});
+
 Run("Viewer window storage is separate, atomic, and tolerant of damaged preferences", () =>
 {
     var directory = Path.Combine(Path.GetTempPath(), $"LanView-window-test-{Guid.NewGuid():N}");
@@ -348,9 +394,14 @@ Run("Viewer window storage is separate, atomic, and tolerant of damaged preferen
         var first = new ViewerWindowSize(1440, 850, 96);
         ViewerWindowSizeStore.Save(first, path);
         Require(ViewerWindowSizeStore.Load(path) == first, "Window size did not round-trip.");
-        var second = first with { Width = 1200 };
+        File.WriteAllText(path, "{\"Width\":1440,\"Height\":850,\"Dpi\":96}");
+        Require(ViewerWindowSizeStore.Load(path) == first, "Old size-only preferences no longer load.");
+        var second = first with { Width = 1200, X = -1500, Y = 90 };
         ViewerWindowSizeStore.Save(second, path);
-        Require(ViewerWindowSizeStore.Load(path) == second, "A changed size was not saved.");
+        Require(ViewerWindowSizeStore.Load(path) == second, "Size and position did not round-trip.");
+        second = second with { Y = 120 };
+        ViewerWindowSizeStore.Save(second, path);
+        Require(ViewerWindowSizeStore.Load(path) == second, "Moving without resizing was not saved.");
         try
         {
             ViewerWindowSizeStore.Save(second with { Width = -1 }, path);
@@ -359,7 +410,8 @@ Run("Viewer window storage is separate, atomic, and tolerant of damaged preferen
         catch (ArgumentException) { }
         Require(ViewerWindowSizeStore.Load(path) == second, "An invalid update overwrote the previous size.");
         Require(Directory.GetFiles(directory).Length == 1, "A temporary preferences file was left behind.");
-        foreach (var content in new[] { "{", "null", "{}", "[]", "{\"Width\":-1,\"Height\":850,\"Dpi\":96}", new string(' ', 4097) })
+        foreach (var content in new[] { "{", "null", "{}", "[]", "{\"Width\":-1,\"Height\":850,\"Dpi\":96}",
+            "{\"Width\":800,\"Height\":600,\"Dpi\":96,\"X\":10}", new string(' ', 4097) })
         {
             File.WriteAllText(path, content);
             Require(ViewerWindowSizeStore.Load(path) is null, "A damaged window preference was accepted.");

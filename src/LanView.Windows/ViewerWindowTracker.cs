@@ -22,6 +22,7 @@ internal sealed class ViewerWindowTracker : IDisposable
     private readonly List<nint> hooks = [];
     private readonly System.Windows.Forms.Timer saveTimer = new() { Interval = 350 };
     private ViewerWindowSize? lastSize;
+    private string? restoreMonitor;
     private nint window;
     private bool applying;
     private bool disposed;
@@ -66,12 +67,14 @@ internal sealed class ViewerWindowTracker : IDisposable
             if (candidate != window) return;
             if (eventId == EventSystemMoveSizeEnd)
             {
+                // A user move takes priority over a pending startup placement.
+                restoreMonitor = null;
                 saveTimer.Stop();
-                RememberSize();
+                RememberBounds();
             }
             else if (eventId == EventObjectLocationChange)
             {
-                // Coalesce resize bursts and wait for fullscreen/maximize transitions to finish.
+                // Coalesce move/resize bursts and wait for fullscreen/maximize transitions to finish.
                 saveTimer.Stop();
                 saveTimer.Start();
             }
@@ -106,14 +109,36 @@ internal sealed class ViewerWindowTracker : IDisposable
         var dpi = GetDpiForWindow(window);
         if (dpi is < 48 or > 768) return;
         var bounds = nativeBounds.ToRectangle();
-        var restored = lastSize.FitToWorkingArea(bounds, Screen.FromHandle(window).WorkingArea, dpi);
+        var currentScreen = Screen.FromHandle(window);
+        var targetScreen = lastSize.SavedBounds is { } savedBounds
+            ? Screen.FromRectangle(savedBounds) : currentScreen;
+        if (targetScreen.DeviceName != currentScreen.DeviceName)
+        {
+            // GetDpiForWindow reports the old monitor until the async move completes.
+            // Move with the saved pixel size first, then fit using the destination DPI.
+            restoreMonitor = targetScreen.DeviceName;
+            dpi = lastSize.Dpi;
+        }
+        var restored = lastSize.FitToWorkingArea(bounds, targetScreen.WorkingArea, dpi);
+        if (!ApplyBounds(restored)) restoreMonitor = null;
+    }
+
+    private bool ApplyBounds(Rectangle restored)
+    {
         applying = true;
         try
         {
             // Keep the current Z order and focus, including when another app is active.
             // Do not block the launcher while the viewer initializes its decoder.
             if (!SetWindowPos(window, 0, restored.X, restored.Y, restored.Width, restored.Height,
-                KeepZOrder | DoNotActivate | KeepOwnerZOrder | AsyncWindowPosition)) ReportFailure();
+                KeepZOrder | DoNotActivate | KeepOwnerZOrder | AsyncWindowPosition))
+            {
+                ReportFailure();
+                return false;
+            }
+            saveTimer.Stop();
+            saveTimer.Start();
+            return true;
         }
         finally { applying = false; }
     }
@@ -121,14 +146,32 @@ internal sealed class ViewerWindowTracker : IDisposable
     private void OnSaveTimer(object? sender, EventArgs e)
     {
         saveTimer.Stop();
-        RememberSize();
+        if (restoreMonitor is not null && lastSize is not null)
+        {
+            if (!IsNormalWindow() || !GetWindowRect(window, out var nativeBounds)) return;
+            var screen = Screen.FromHandle(window);
+            if (screen.DeviceName != restoreMonitor
+                && Screen.AllScreens.Any(candidate => candidate.DeviceName == restoreMonitor)) return;
+            var dpi = GetDpiForWindow(window);
+            if (dpi is < 48 or > 768) return;
+            restoreMonitor = null;
+            var bounds = nativeBounds.ToRectangle();
+            var restored = lastSize.FitToWorkingArea(bounds, screen.WorkingArea, dpi);
+            if (restored != bounds)
+            {
+                ApplyBounds(restored);
+                return;
+            }
+        }
+        RememberBounds();
     }
 
-    private void RememberSize()
+    private void RememberBounds()
     {
-        // SDL removes the caption in fullscreen; neither that nor maximize replaces normal size.
-        if (!IsNormalWindow() || !GetWindowRect(window, out var bounds)) return;
-        var size = new ViewerWindowSize(bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, GetDpiForWindow(window));
+        // Fullscreen, maximize and minimize must not replace the normal bounds.
+        if (restoreMonitor is not null || !IsNormalWindow() || !GetWindowRect(window, out var bounds)) return;
+        var size = new ViewerWindowSize(bounds.Right - bounds.Left, bounds.Bottom - bounds.Top,
+            GetDpiForWindow(window), bounds.Left, bounds.Top);
         if (!size.IsValid || size == lastSize) return;
         try
         {
@@ -145,7 +188,7 @@ internal sealed class ViewerWindowTracker : IDisposable
     {
         if (errorReported) return;
         errorReported = true;
-        report("Não foi possível guardar ou restaurar o tamanho da janela. O vídeo continua disponível.");
+        report("Não foi possível guardar ou restaurar o tamanho e a posição da janela. O vídeo continua disponível.");
     }
 
     public void Dispose()
@@ -153,7 +196,7 @@ internal sealed class ViewerWindowTracker : IDisposable
         if (disposed) return;
         disposed = true;
         saveTimer.Stop();
-        RememberSize();
+        RememberBounds();
         saveTimer.Dispose();
         foreach (var hook in hooks) UnhookWinEvent(hook);
         hooks.Clear();

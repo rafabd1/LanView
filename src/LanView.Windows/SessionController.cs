@@ -244,7 +244,7 @@ public sealed class SessionController : IDisposable
             try { viewerWindow = new ViewerWindowTracker(process.Id, message => Log?.Invoke(message)); }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
             {
-                Log?.Invoke("Não foi possível acompanhar o tamanho da janela. O vídeo continua disponível.");
+                Log?.Invoke("Não foi possível acompanhar o tamanho e a posição da janela. O vídeo continua disponível.");
             }
         }
         return process;
